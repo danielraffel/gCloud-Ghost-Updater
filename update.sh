@@ -225,6 +225,10 @@ ENDSSH
 
       # Assign old IP to new VM
       gcloud compute instances add-access-config $NEW_VM_NAME --access-config-name="$ACTUAL_ACCESS_CONFIG_NAME_NEW" --address=$OLD_IP_ADDRESS --zone=$ZONE
+
+      # Option to enable stopping the old VM after the IP change
+      # gcloud compute instances stop $VM_NAME --zone=$ZONE
+
     else
       echo "Not updating the IP."
     fi
