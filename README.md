@@ -3,3 +3,5 @@ This will fetch your Google Cloud VM info, create a machine image backup, start 
 
 Bit more about it here:
 https://danielraffel.me/2023/09/05/updating-ghost-on-a-google-cloud-micro-instance/
+
+![](https://i.imgur.com/qvHIFVy.gif)
