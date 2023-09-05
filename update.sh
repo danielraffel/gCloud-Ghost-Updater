@@ -12,7 +12,7 @@
 # This is for debugging if you get a new updated VM and want to check the status and update the IP address run: update.sh compare
 compare_versions() {
   # Replace with actual IP_ADDRESS
-  IP_ADDRESS="34.145.68.235"
+  IP_ADDRESS="ENTER_YOUR_IP_ADDRESS"
   LATEST_VERSION=$(curl --silent "https://api.github.com/repos/TryGhost/Ghost/releases/latest" | jq -r .tag_name)
   GHOST_VM_VERSION=$(ssh -i ~/.ssh/gcp service_account@$IP_ADDRESS "cd /var/www/ghost && ghost version | grep 'Ghost version:' | awk '{print \$3}'")
   GHOST_STATUS=$(ssh -i ~/.ssh/gcp service_account@${IP_ADDRESS} "cd /var/www/ghost && ghost status | grep -o 'running'")
