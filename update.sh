@@ -1,42 +1,41 @@
 #!/bin/bash
 
-# What's the purpose of this script? Google Cloud's free micro instances lack the power to update Ghost without taking it offline. This script automates creating a new VM, updating Ghost there, and switching the IP, all without affecting the live instance.
+# Purpose: Automate Ghost Blog updates on Google Cloud's free micro instances.
+# Assumptions: 
+# - You're executing this on your local machine.
+# - Required tools installed: jq, curl, expect, ssh-keygen, ssh-keyscan, gcloud CLI.
+# - Your Ghost instance setup was setup using: https://scottleechua.com/blog/self-hosting-ghost-on-google-cloud/
+# - SSH keys configured for "service_account" on Google Cloud.
+# - Using a premium static external IP.
 
-# This script assumes you
-# 1. Are running this script on your local machine 
-# 2. Have the following installed: jq, curl, expect, ssh-keygen, ssh-keyscan, gcloud CLI
-# 3. Setup your Ghost instance on Google cloud machine with a "service_account" similar to this setup https://scottleechua.com/blog/self-hosting-ghost-on-google-cloud/
-# 4. Setup ssh keys on your Google cloud machine so that "service_account" can ssh into your server
-# 5. Are using a premium (eg-not standard) static external IP address on your currently running micro-instance
-
-# This is for debugging if you get a new updated VM and want to check the status and update the IP address run: update.sh compare
+# Debugging Tip: Only run this script with "compare" to check Ghost version and update IP.
 compare_versions() {
-  # Replace with actual IP_ADDRESS
+  # Initialize needed variables
   IP_ADDRESS="ENTER_YOUR_IP_ADDRESS"
   LATEST_VERSION=$(curl --silent "https://api.github.com/repos/TryGhost/Ghost/releases/latest" | jq -r .tag_name)
   GHOST_VM_VERSION=$(ssh -i ~/.ssh/gcp service_account@$IP_ADDRESS "cd /var/www/ghost && ghost version | grep 'Ghost version:' | awk '{print \$3}'")
   GHOST_STATUS=$(ssh -i ~/.ssh/gcp service_account@${IP_ADDRESS} "cd /var/www/ghost && ghost status | grep -o 'running'")
 
+  # Debugging info
   echo "Debug: Expected Ghost Version: '$LATEST_VERSION', Found Version: '$GHOST_VM_VERSION'"
   echo "Debug: Expected Ghost Status: 'running', Found Status: '$GHOST_STATUS'"
 
-  # Check if Ghost is updated and running
+  # Check Ghost version and status
   if [[ "$GHOST_VM_VERSION" == "${LATEST_VERSION:1}" && "$GHOST_STATUS" == "running" ]]; then
     echo "GOOD NEWS!! Ghost is running and is the latest version."
 
+    # IP reassignment prompt
     read -p "Do you want to re-assign the IP address for: $NEW_VM_NAME? (y/n): " answer
     if [ "$answer" == "y" ]; then
-      # Fetch the actual access-config names
+      # Fetch and update access-config
       ACTUAL_ACCESS_CONFIG_NAME_OLD=$(gcloud compute instances describe $VM_NAME --zone=$ZONE --format='get(networkInterfaces[0].accessConfigs[0].name)')
       ACTUAL_ACCESS_CONFIG_NAME_NEW=$(gcloud compute instances describe $NEW_VM_NAME --zone=$ZONE --format='get(networkInterfaces[0].accessConfigs[0].name)')
 
-      # Unassign the old IP from the OLD VM
+      # Remove old and existing access configs
       gcloud compute instances delete-access-config $VM_NAME --access-config-name="$ACTUAL_ACCESS_CONFIG_NAME_OLD" --zone=$ZONE
-
-      # Remove any existing access config from the NEW VM
       gcloud compute instances delete-access-config $NEW_VM_NAME --access-config-name="$ACTUAL_ACCESS_CONFIG_NAME_NEW" --zone=$ZONE
 
-      # Assign the old IP to the NEW VM
+      # Assign old IP to new VM
       gcloud compute instances add-access-config $NEW_VM_NAME --access-config-name="$ACTUAL_ACCESS_CONFIG_NAME_NEW" --address=$OLD_IP_ADDRESS --zone=$ZONE
     else
       echo "Not updating the IP."
@@ -46,7 +45,6 @@ compare_versions() {
   fi
 
   echo "Done."
-
 }
 
 case "$1" in
@@ -115,7 +113,6 @@ if [ "$answer" == "y" ]; then
     fi
   done
 
-
   echo "Creating machine image..."
   gcloud compute machine-images create $IMAGE_NAME \
     --project=$PROJECT_ID \
@@ -146,15 +143,17 @@ if [ "$answer" == "y" ]; then
     sleep 5
   done
 
-  # Rest of the original script
+  # Get the IP Address
   IP_ADDRESS=$(gcloud compute instances describe $NEW_VM_NAME \
     --project=$PROJECT_ID \
     --zone=$ZONE \
     --format='get(networkInterfaces[0].accessConfigs[0].natIP)')
 
+  # Remove existing keys
   echo "Removing any existing keys for the IP: $IP_ADDRESS"
   ssh-keygen -R $IP_ADDRESS 2>/dev/null
 
+  # Checking if new VM instance is ready for SSH
   echo "Checking SSH readiness every 5 seconds..."
   MAX_ATTEMPTS=12
   COUNT=0
@@ -174,7 +173,7 @@ if [ "$answer" == "y" ]; then
     sleep 5
   done
 
-
+  # SSH into the new VM and start the updating
   sshUpdateGhost() {
     ssh -t -i ~/.ssh/gcp service_account@$1 << "ENDSSH"
       cd /var/www/ghost
@@ -209,23 +208,22 @@ ENDSSH
   echo "Debug: Expected Ghost Version: '$LATEST_VERSION', Found Version: '$GHOST_VM_VERSION'"
   echo "Debug: Expected Ghost Status: 'running', Found Status: '$GHOST_STATUS'"
 
-  # Check if Ghost is updated and running
+  # Check Ghost version and status on new machine
   if [[ "$GHOST_VM_VERSION" == "${LATEST_VERSION:1}" && "$GHOST_STATUS" == "running" ]]; then
-    echo "GOOD NEWS!! Ghost is running and is the latest version."
+    echo "${BOLD}${GREEN}GOOD NEWS!!${NC} Ghost is running and is the latest version."
 
+    # Fetch and update access-config
     read -p "Do you want to re-assign the IP address for: $NEW_VM_NAME? (y/n): " answer
     if [ "$answer" == "y" ]; then
       # Fetch the actual access-config names
       ACTUAL_ACCESS_CONFIG_NAME_OLD=$(gcloud compute instances describe $VM_NAME --zone=$ZONE --format='get(networkInterfaces[0].accessConfigs[0].name)')
       ACTUAL_ACCESS_CONFIG_NAME_NEW=$(gcloud compute instances describe $NEW_VM_NAME --zone=$ZONE --format='get(networkInterfaces[0].accessConfigs[0].name)')
 
-      # Unassign the old IP from the OLD VM
+      # Remove old and existing access configs
       gcloud compute instances delete-access-config $VM_NAME --access-config-name="$ACTUAL_ACCESS_CONFIG_NAME_OLD" --zone=$ZONE
-
-      # Remove any existing access config from the NEW VM
       gcloud compute instances delete-access-config $NEW_VM_NAME --access-config-name="$ACTUAL_ACCESS_CONFIG_NAME_NEW" --zone=$ZONE
 
-      # Assign the old IP to the NEW VM
+      # Assign old IP to new VM
       gcloud compute instances add-access-config $NEW_VM_NAME --access-config-name="$ACTUAL_ACCESS_CONFIG_NAME_NEW" --address=$OLD_IP_ADDRESS --zone=$ZONE
     else
       echo "Not updating the IP."
