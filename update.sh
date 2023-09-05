@@ -220,16 +220,16 @@ ENDSSH
       ACTUAL_ACCESS_CONFIG_NAME_NEW=$(gcloud compute instances describe $NEW_VM_NAME --zone=$ZONE --format='get(networkInterfaces[0].accessConfigs[0].name)')
 
       # Option to enable stopping the old VM before the IP change to avoid using a premium IP. Unfortunately, you can't assign a standard free IP to a premium instance so if you only have one micro-instance runing that's your free one!
-      # gcloud compute instances stop $VM_NAME --zone=$ZONE
+      gcloud compute instances stop $VM_NAME --zone=$ZONE
 
-      # Wait for old machine to stop before removing and reassigning the standard IP to the new machine
-      # while true; do
-      # VM_STATUS=$(gcloud compute instances describe $VM_NAME --zone=$ZONE --format='get(status)')
-      # if [ "$VM_STATUS" == "TERMINATED" ]; then
-      #     break
-      # fi
-      # sleep 5
-      # done
+      Wait for old machine to stop before removing and reassigning the standard IP to the new machine
+      while true; do
+      VM_STATUS=$(gcloud compute instances describe $VM_NAME --zone=$ZONE --format='get(status)')
+      if [ "$VM_STATUS" == "TERMINATED" ]; then
+           break
+      fi
+      sleep 5
+      done
 
       # Remove old and existing access configs
       gcloud compute instances delete-access-config $VM_NAME --access-config-name="$ACTUAL_ACCESS_CONFIG_NAME_OLD" --zone=$ZONE
