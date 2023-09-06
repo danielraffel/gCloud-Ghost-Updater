@@ -8,6 +8,30 @@
 # - SSH keys configured for "service_account" on Google Cloud.
 # - Using a premium static external IP.
 
+
+# Declare required commands and URLs
+commands=("gcloud" "jq" "curl" "expect" "ssh-keygen" "ssh-keyscan")
+urls=("https://cloud.google.com/sdk/docs/install" "https://jqlang.github.io/jq/" "https://curl.se/" "https://www.digitalocean.com/community/tutorials/expect-script-ssh-example-tutorial" "https://docs.github.com/en/authentication/connecting-to-github-with-ssh/generating-a-new-ssh-key-and-adding-it-to-the-ssh-agent" "https://man.openbsd.org/ssh-keyscan.1")
+
+# Check if all the commands are installed
+missing_flag=0
+for i in ${!commands[@]}; do
+  cmd=${commands[$i]}
+  url=${urls[$i]}
+  if ! command -v $cmd > /dev/null 2>&1; then
+    echo "$cmd is not installed. Learn more: $url"
+    missing_flag=1
+  fi
+done
+
+# Exit if any command is missing
+if [ $missing_flag -eq 1 ]; then
+  echo "Exiting updater."
+  exit 1
+fi
+
+
+
 # Debugging Tip: Only run this script with "compare" to check Ghost version and update IP.
 compare_versions() {
   # Initialize needed variables
