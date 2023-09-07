@@ -2,7 +2,7 @@
 
 This bash script helps automate the update process for Ghost running on a Google Cloud. It was designed because the author is running a micro instance which is very resource limited. This will fetch your Google Cloud VM info, create a machine image backup, start a new VM from that backup image and update it to the latest version of Ghost and will offer to assign your external IP address from your original VM to this new VM. It's designed to update safely from a backup and cut over to your new machine only when the update succeeds.
 
-It is designed to be used with [RestartVMService](https://github.com/danielraffel/RestartVMService) and [httpPing](https://github.com/danielraffel/httpPing) to help restart your VM if it becomes unavailable.
+Although not required, it's compatible with [RestartVMService](https://github.com/danielraffel/RestartVMService) and [httpPing](https://github.com/danielraffel/httpPing) to restart your VM if the URL it's hosting appears to be offline.
 
 ## Requirements
 
