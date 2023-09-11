@@ -202,8 +202,13 @@ if [ "$answer" == "y" ]; then
     ssh -t -i ~/.ssh/gcp service_account@$1 << "ENDSSH"
       cd /var/www/ghost
       ghost stop
+      sudo snap enable snapd
+      sudo apt update && sudo apt -y upgrade
+      sudo apt clean && sudo apt autoclean && sudo apt autoremove
+      sudo npm install -g npm@latest
       sudo npm install -g ghost-cli@latest
       ghost update
+      sudo snap disable snapd
       ghost start
 ENDSSH
   }
