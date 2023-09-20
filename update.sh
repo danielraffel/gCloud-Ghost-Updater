@@ -1,103 +1,71 @@
 #!/bin/bash
 
-# Purpose: Automate Ghost Blog updates on Google Cloud's free micro instances.
-# Assumptions: 
-# - You're executing this on your local machine.
-# - Required tools installed: jq, curl, expect, ssh-keygen, ssh-keyscan, gcloud CLI.
-# - Your Ghost instance setup was setup using: https://scottleechua.com/blog/self-hosting-ghost-on-google-cloud/
-# - SSH keys configured for "service_account" on Google Cloud.
-# - Using a premium static external IP.
+# This script automates the process of updating a Google Cloud VM running Ghost Blog
+# It creates a new VM with the latest Ghost version, ensures Ghost is updated and running
+# Offers to transfer the IP address from the OLD VM to the NEW VM if desired by the user
 
+# Function to check if all required commands and utilities are installed on the system before running script
+check_prerequisites() {
+  # Declare required commands and URLs
+  commands=("gcloud" "jq" "curl" "expect" "ssh-keygen" "ssh-keyscan")
+  urls=("https://cloud.google.com/sdk/docs/install" "https://jqlang.github.io/jq/" "https://curl.se/" "https://www.digitalocean.com/community/tutorials/expect-script-ssh-example-tutorial" "https://docs.github.com/en/authentication/connecting-to-github-with-ssh/generating-a-new-ssh-key-and-adding-it-to-the-ssh-agent" "https://man.openbsd.org/ssh-keyscan.1")
 
-# Declare required commands and URLs
-commands=("gcloud" "jq" "curl" "expect" "ssh-keygen" "ssh-keyscan")
-urls=("https://cloud.google.com/sdk/docs/install" "https://jqlang.github.io/jq/" "https://curl.se/" "https://www.digitalocean.com/community/tutorials/expect-script-ssh-example-tutorial" "https://docs.github.com/en/authentication/connecting-to-github-with-ssh/generating-a-new-ssh-key-and-adding-it-to-the-ssh-agent" "https://man.openbsd.org/ssh-keyscan.1")
-
-# Check if all the commands are installed
-missing_flag=0
-for i in ${!commands[@]}; do
-  cmd=${commands[$i]}
-  url=${urls[$i]}
-  if ! command -v $cmd > /dev/null 2>&1; then
-    echo "$cmd is not installed. Learn more: $url"
-    missing_flag=1
-  fi
-done
-
-# Exit if any command is missing
-if [ $missing_flag -eq 1 ]; then
-  echo "Exiting updater."
-  exit 1
-fi
-
-
-
-# Debugging Tip: Only run this script with "compare" to check Ghost version and update IP.
-compare_versions() {
-  # Initialize needed variables
-  IP_ADDRESS="ENTER_YOUR_IP_ADDRESS"
-  LATEST_VERSION=$(curl --silent "https://api.github.com/repos/TryGhost/Ghost/releases/latest" | jq -r .tag_name)
-  GHOST_VM_VERSION=$(ssh -i ~/.ssh/gcp service_account@$IP_ADDRESS "cd /var/www/ghost && ghost version | grep 'Ghost version:' | awk '{print \$3}'")
-  GHOST_STATUS=$(ssh -i ~/.ssh/gcp service_account@${IP_ADDRESS} "cd /var/www/ghost && ghost status | grep -o 'running'")
-
-  # Debugging info
-  echo "Debug: Expected Ghost Version: '$LATEST_VERSION', Found Version: '$GHOST_VM_VERSION'"
-  echo "Debug: Expected Ghost Status: 'running', Found Status: '$GHOST_STATUS'"
-
-  # Check Ghost version and status
-  if [[ "$GHOST_VM_VERSION" == "${LATEST_VERSION:1}" && "$GHOST_STATUS" == "running" ]]; then
-    echo "GOOD NEWS!! Ghost is running and is the latest version."
-
-    # IP reassignment prompt
-    read -p "Do you want to re-assign the IP address for: $NEW_VM_NAME? (y/n): " answer
-    if [ "$answer" == "y" ]; then
-      # Fetch and update access-config
-      ACTUAL_ACCESS_CONFIG_NAME_OLD=$(gcloud compute instances describe $VM_NAME --zone=$ZONE --format='get(networkInterfaces[0].accessConfigs[0].name)')
-      ACTUAL_ACCESS_CONFIG_NAME_NEW=$(gcloud compute instances describe $NEW_VM_NAME --zone=$ZONE --format='get(networkInterfaces[0].accessConfigs[0].name)')
-
-      # Remove old and existing access configs
-      gcloud compute instances delete-access-config $VM_NAME --access-config-name="$ACTUAL_ACCESS_CONFIG_NAME_OLD" --zone=$ZONE
-      gcloud compute instances delete-access-config $NEW_VM_NAME --access-config-name="$ACTUAL_ACCESS_CONFIG_NAME_NEW" --zone=$ZONE
-
-      # Assign old IP to new VM
-      gcloud compute instances add-access-config $NEW_VM_NAME --access-config-name="$ACTUAL_ACCESS_CONFIG_NAME_NEW" --address=$OLD_IP_ADDRESS --zone=$ZONE
-    else
-      echo "Not updating the IP."
+  # Check if all the commands are installed
+  missing_flag=0
+  for i in ${!commands[@]}; do
+    cmd=${commands[$i]}
+    url=${urls[$i]}
+    if ! command -v $cmd > /dev/null 2>&1; then
+      echo "$cmd is not installed. Learn more: $url"
+      missing_flag=1
     fi
-  else
-    echo "Not updating the IP address because the machine was not updated to the latest version of Ghost and/or isn't running."
-  fi
+  done
 
-  echo "Done."
+  # Exit if any command is missing
+  if [ $missing_flag -eq 1 ]; then
+    echo "Exiting updater."
+    exit 1
+  fi
 }
 
-case "$1" in
-  "compare")
-    compare_versions
-    exit 0
-    ;;
-  *)
-
-cat << "EOF"
+# Function to check if user wants to update Ghost using this installer
+prompt_to_update() {
+  cat << "EOF"
  ██████  ██   ██  ██████  ███████ ████████ ██    ██ ██████  ██████   █████  ████████ ███████ ██████  
 ██       ██   ██ ██    ██ ██         ██    ██    ██ ██   ██ ██   ██ ██   ██    ██    ██      ██   ██ 
 ██   ███ ███████ ██    ██ ███████    ██    ██    ██ ██████  ██   ██ ███████    ██    █████   ██████  
 ██    ██ ██   ██ ██    ██      ██    ██    ██    ██ ██      ██   ██ ██   ██    ██    ██      ██   ██ 
  ██████  ██   ██  ██████  ███████    ██     ██████  ██      ██████  ██   ██    ██    ███████ ██   ██
 EOF
+  read -p "Update Ghost on GCloud? Creates a backup, starts a new VM, updates Ghost, re-assigns old IP if successful. (y/n): " answer
 
-# Prompt for Google Cloud info
-read -p "Update Ghost on GCloud? Creates backup, starts a new VM, updates Ghost, re-assigns old IP if successful. (y/n): " answer
+  case "$answer" in
+    [yY]|[yY][eE][sS])
+      echo "Proceeding with update."
+      ;;
+    [nN]|[nN][oO])
+      echo "Skipping updating Ghost on Google Cloud. Exiting."
+      exit 1
+      ;;
+    *)
+      echo "Invalid input. Exiting."
+      exit 1
+      ;;
+  esac
+}
 
-if [ "$answer" == "y" ]; then
-  # Fetch project ID and VM information
+# Function to fetch information about VM from Google Cloud Platform
+fetch_vm_info() {
+  # Fetch the project ID using gcloud command
   PROJECT_ID=$(gcloud config list --format 'value(core.project)')
-  VM_INFO=$(gcloud compute instances list --filter="name ~ '.*-ghost-.*' AND status=RUNNING" --format='csv[no-heading](name,zone,networkInterfaces[0].accessConfigs[0].natIP)')
 
-  # Count the number of VM instances
+  # Fetch information about VM instances matching certain filters and format the output
+  VM_INFO=$(gcloud compute instances list --filter="name ~ '^ghost|-ghost' AND status=RUNNING" --format='csv[no-heading](name,zone,networkInterfaces[0].accessConfigs[0].natIP)')
+
+  # Count the number of lines in the VM information output to determine the number of VM instances
   VM_LINES=$(echo "$VM_INFO" | wc -l)
 
-  # If multiple VM instances are found, prompt the user to select one
+  # If there is more than one VM, prompt the user to choose one
   if [ "$VM_LINES" -gt 1 ]; then
     echo "Multiple VMs detected. Select one:"
     select OPTION in $VM_INFO; do
@@ -114,20 +82,23 @@ if [ "$answer" == "y" ]; then
     ZONE=${ADDR[1]}
     OLD_IP_ADDRESS=${ADDR[2]}
 
-    # Display the table
+    # Display found VM details
     echo "Found 1 VM:"
-	printf "Name\tZone\tIP Address\n"
-	printf "%s\t%s\t%s\n" "$VM_NAME" "$ZONE" "$OLD_IP_ADDRESS"
+    printf "Name\tZone\tIP Address\n"
+    printf "%s\t%s\t%s\n" "$VM_NAME" "$ZONE" "$OLD_IP_ADDRESS"
   fi
 
-  # Extracting the numeric string from the suffix of the selected VM_NAME
+  # Extract the numeric suffix from the VM name for further processing
   NUMERIC_SUFFIX=$(echo "$VM_NAME" | awk -F'-' '{print $(NF-2)"-"$(NF-1)"-"$NF}')
-  
+
+  # Indicate the VM that was found
   echo "Found VM: $VM_NAME"
 
+  # Initialize a counter for the image naming
   COUNTER=0
   IMAGE_NAME="backup-${VM_NAME}"
 
+  # Loop to check for existing backup images and increment the counter to avoid naming conflicts
   while true; do
     if gcloud compute machine-images describe $IMAGE_NAME --project=$PROJECT_ID &>/dev/null; then
       let COUNTER=COUNTER+1
@@ -136,25 +107,47 @@ if [ "$answer" == "y" ]; then
       break
     fi
   done
+}
 
+# Fetch latest version of Ghost
+fetch_latest_ghost_version() {
+  # Fetch the latest version of Ghost Blog from GitHub releases
+  echo "Fetching latest Ghost Blog version..."
+  LATEST_VERSION=$(curl --silent "https://api.github.com/repos/TryGhost/Ghost/releases/latest" | jq -r .tag_name)
+  # This will remove the "v" prefix
+#   LATEST_VERSION=${LATEST_VERSION:1}
+
+  # Format the version string for usage in the new VM name
+  LATEST_VERSION_FORMATTED="${LATEST_VERSION//./-}"
+}
+
+# Function to create an image from the existing VM and start a new Virtual Machine (VM) from that image with a snapshot schedule
+create_new_vm() {
+  # Create a machine image from the source VM instance
   echo "Creating machine image..."
   gcloud compute machine-images create $IMAGE_NAME \
     --project=$PROJECT_ID \
     --source-instance=$VM_NAME \
     --source-instance-zone=$ZONE
 
-  echo "Fetching latest Ghost Blog version..."
-  LATEST_VERSION=$(curl --silent "https://api.github.com/repos/TryGhost/Ghost/releases/latest" | jq -r .tag_name)
-  LATEST_VERSION_FORMATTED="${LATEST_VERSION//./-}"
+  # calls function to fetch latest version of Ghost
+  fetch_latest_ghost_version
 
+  # Create a new VM name using the base of the old name and appending the latest version
   NEW_VM_NAME="${VM_NAME%-${NUMERIC_SUFFIX}}-${LATEST_VERSION_FORMATTED}"
 
+  # Create a new VM instance using the machine image
   echo "Creating new VM instance..."
   gcloud compute instances create $NEW_VM_NAME \
     --project=$PROJECT_ID \
     --zone=$ZONE \
     --source-machine-image=$IMAGE_NAME
 
+  # Optional: get through updates quicker by using an upgraded VM
+  # Note: Requires calling downgrade_vm too
+  # upgrade_vm
+
+  # Wait until the new VM instance reaches the "RUNNING" state
   echo "Waiting for VM to become RUNNING..."
   while true; do
     VM_STATUS=$(gcloud compute instances describe $NEW_VM_NAME \
@@ -167,118 +160,316 @@ if [ "$answer" == "y" ]; then
     sleep 5
   done
 
-  # Get the IP Address
-  IP_ADDRESS=$(gcloud compute instances describe $NEW_VM_NAME \
+  # Fetch the IP address of the new VM instance
+  IP_ADDRESS_NEW_VM=$(gcloud compute instances describe $NEW_VM_NAME \
     --project=$PROJECT_ID \
     --zone=$ZONE \
     --format='get(networkInterfaces[0].accessConfigs[0].natIP)')
 
-  # Remove existing keys
-  echo "Removing any existing keys for the IP: $IP_ADDRESS"
-  ssh-keygen -R $IP_ADDRESS 2>/dev/null
+  # Attach the existing daily snapshot schedule to the new VM instance
+  gcloud compute disks update $NEW_VM_NAME \
+  --project=$PROJECT_ID \
+  --zone=$ZONE \
+  --snapshot-schedule=daily-backup-schedule
 
-  # Checking if new VM instance is ready for SSH
+  # Remove any existing SSH keys associated with the new IP address to prevent conflicts
+  echo "Removing any existing keys for the IP: $IP_ADDRESS_NEW_VM"
+  ssh-keygen -R $IP_ADDRESS_NEW_VM 2>/dev/null
+}
+
+# Function to check if the new VM instance is ready to accept SSH connections
+check_vm_ready_for_ssh() {
+  # Notify the user that SSH readiness is being checked
   echo "Checking SSH readiness every 5 seconds..."
+
+  # Maximum number of attempts to check for SSH readiness
   MAX_ATTEMPTS=12
+  # Initialize a counter to keep track of the number of attempts made
   COUNT=0
+
+  # Loop to keep trying SSH connection until it's ready or the maximum attempts are reached
   while true; do
-    ssh -q -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=no -i ~/.ssh/gcp service_account@${IP_ADDRESS} exit
+    ssh -q -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=no -i ~/.ssh/gcp service_account@${IP_ADDRESS_NEW_VM} exit
     RESULT=$?
+    # If SSH connection is successful, break the loop
     if [ $RESULT -eq 0 ]; then
       echo "SSH is ready."
       break
     fi
+    # Increment the counter
     let COUNT=COUNT+1
+    # If maximum attempts reached, exit the script
     if [ $COUNT -ge $MAX_ATTEMPTS ]; then
       echo "SSH not ready after $MAX_ATTEMPTS attempts. Exiting."
       exit 1
     fi
+
+    # Notify the user about the retry
     echo "SSH not ready. Retrying ($COUNT/$MAX_ATTEMPTS)..."
+    # Wait for 5 seconds before the next attempt
+
     sleep 5
   done
+}
 
-  # SSH into the new VM and start the updating
-  sshUpdateGhost() {
-    ssh -t -i ~/.ssh/gcp service_account@$1 << "ENDSSH"
-      cd /var/www/ghost
-      ghost stop
-      sudo snap enable snapd
-      sudo apt update && sudo apt -y upgrade
-      sudo apt clean && sudo apt autoclean && sudo apt autoremove
-      sudo npm install -g npm@latest
-      sudo npm install -g ghost-cli@latest
-      ghost update
-      sudo snap disable snapd
-      ghost start
-ENDSSH
+# Function to SSH into the new VM and perform Ghost Blog software updates
+ssh_update_Ghost() {
+  # SSH into the VM to run pre-update commands like stopping Ghost, updating system packages and rebooting VM
+  echo "SSHing into the VM to stop Ghost, update system packages and enable Snap package manager..."
+  ssh -t -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -i ~/.ssh/gcp service_account@$IP_ADDRESS_NEW_VM << "ENDSSH1"
+    cd /var/www/ghost
+    ghost stop
+    sudo snap enable snapd
+    sudo apt update && sudo apt -y upgrade
+    sudo apt clean && sudo apt autoclean && sudo apt autoremove
+    nohup sudo reboot &
+    exit
+ENDSSH1
+
+  # Call function to check if VM is ready for SSH post-reboot
+  check_vm_ready_for_ssh
+
+  # SSH into the VM again to run post-update commands like updating npm and Ghost CLI, and starting Ghost
+  echo "SSHing into the updated VM to update Node Package Manager (NPM), Ghost, disable Snap service and start Ghost..."
+  ssh -t -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -i ~/.ssh/gcp service_account@$IP_ADDRESS_NEW_VM << "ENDSSH2"
+    cd /var/www/ghost
+    sudo npm install -g npm@latest
+    sudo npm install -g ghost-cli@latest
+    ghost update
+    sudo snap disable snapd
+    ghost start
+ENDSSH2
+}
+
+
+# Function to check the Ghost Blog software version and its running status on the VM
+check_vm_ghost_version() {
+  # SSH into the VM and fetch both Ghost version and status in a single SSH session
+  local output
+  output=$(ssh -t -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -i ~/.ssh/gcp service_account@$IP_ADDRESS_NEW_VM "cd /var/www/ghost && ghost version && ghost status") || {
+    echo "SSH command failed. Exiting."
+    exit 1
   }
 
-  fetchGhostInfo() {
-    local ip=$1
-    local version=$(ssh -i ~/.ssh/gcp service_account@$ip "cd /var/www/ghost && ghost version | grep 'Ghost version:' | awk '{print \$3}'")
-    local status=$(ssh -i ~/.ssh/gcp service_account@$ip "cd /var/www/ghost && ghost status | grep -o 'running'")
-    echo "$version,$status"
-  }
+  # Extract the Ghost version from the 'output' variable
+  local version
+  version=$(echo "$output" | grep 'Ghost version:' | awk '{print $3}')
+  if [ -z "$version" ]; then
+    echo "Unable to fetch Ghost version. Exiting."
+    exit 1
+  fi
 
-  echo "SSHing into the VM instance to run update commands..."
-  sshUpdateGhost $IP_ADDRESS
+  # Extract the Ghost running status from the 'output' variable
+  local status
+  status=$(echo "$output" | grep -o 'running')
+  if [ -z "$status" ]; then
+    echo "Unable to fetch Ghost status. Exiting."
+    exit 1
+  fi
 
-  # For text coloring
+  # Output the fetched Ghost version and status as a comma-separated string
+  echo "$version,$status"
+}
+
+# # Function to display the Ghost Blog software version and its running status on the VM
+# present_vm_ghost_version() {
+#   # Define text color variables for terminal output
+#   GREEN='\033[0;32m'
+#   BOLD='\033[1m'
+#   NC='\033[0m'
+
+#   # Fetch Ghost VM version and status from present_vm_ghost_version function
+#   IFS=',' read -ra GHOST_INFO <<< "$(check_vm_ghost_version $IP_ADDRESS_NEW_VM)"
+#   GHOST_VM_VERSION=$(echo "${GHOST_INFO[0]}" | xargs)  # Trim whitespaces
+#   GHOST_STATUS=$(echo "${GHOST_INFO[1]}" | xargs)  # Trim whitespaces
+
+#   # Present what version of Ghost was expected post update vs what version of Ghost was found and if it's running
+#   echo "Expected Ghost Version: '$LATEST_VERSION', Found Version: '$GHOST_VM_VERSION'"
+#   echo "Expected Ghost Status: 'running', Found Status: '$GHOST_STATUS'"
+
+#   # Check if Ghost version matches the latest version and its status is running
+#   if [[ "$GHOST_VM_VERSION" == "${LATEST_VERSION}" && "$GHOST_STATUS" == "running" ]]; then
+#     echo -e "${BOLD}${GREEN}GOOD NEWS!!${NC} Ghost is running and is the latest version."
+#   else
+#     # Exit script if the Ghost version isn't updated or the status is not running
+#     echo "Ghost is either not running or not updated to the latest version. Exiting."
+#     exit 1
+#   fi
+# }
+
+# Function to display the Ghost Blog software version and its running status on the VM
+present_vm_ghost_version() {
+  # Define text color variables for terminal output
   GREEN='\033[0;32m'
   BOLD='\033[1m'
-  NC='\033[0m' # No Color
+  NC='\033[0m'
 
-  # Fetch Ghost VM version and status
-  IFS=',' read -ra GHOST_INFO <<< "$(fetchGhostInfo $IP_ADDRESS)"
-  GHOST_VM_VERSION=$(echo "${GHOST_INFO[0]}" | xargs)  # Trim whitespaces
+  # Fetch Ghost VM version and status from check_vm_ghost_version function
+  IFS=',' read -ra GHOST_INFO <<< "$(check_vm_ghost_version $IP_ADDRESS_NEW_VM)"
+  GHOST_VM_VERSION=$(echo "${GHOST_INFO[0]}" | sed 's/\x1b\[[0-9;]*m//g' | awk -F'[[:space:]]+' '{print $NF}')  # Remove color codes and grab the last field
+  # GHOST_VM_VERSION=$(echo "${GHOST_INFO[0]}" | xargs)  # Trim whitespaces
   GHOST_STATUS=$(echo "${GHOST_INFO[1]}" | xargs)  # Trim whitespaces
 
-  # Debug: Expected vs Found
-  echo "Debug: Expected Ghost Version: '$LATEST_VERSION', Found Version: '$GHOST_VM_VERSION'"
-  echo "Debug: Expected Ghost Status: 'running', Found Status: '$GHOST_STATUS'"
+  # Remove 'v' from both versions for accurate comparison
+  LATEST_VERSION=$(echo "${LATEST_VERSION}" | sed 's/^v//')
+  GHOST_VM_VERSION=$(echo "${GHOST_VM_VERSION}" | sed 's/^v//')
 
-  # Check Ghost version and status on new machine
-  if [[ "$GHOST_VM_VERSION" == "${LATEST_VERSION:1}" && "$GHOST_STATUS" == "running" ]]; then
+  # Present what version of Ghost was expected post update vs what version of Ghost was found and if it's running
+  echo "Expected Ghost Version: '$LATEST_VERSION', Found Version: '$GHOST_VM_VERSION'"
+  echo "Expected Ghost Status: 'running', Found Status: '$GHOST_STATUS'"
+
+  # Optional: function call to debug version strings
+  # version_string_debugging
+
+  # Check if Ghost version matches the latest version and its status is running
+  if [[ "$GHOST_VM_VERSION" == "${LATEST_VERSION}" && "$GHOST_STATUS" == "running" ]]; then
     echo "${BOLD}${GREEN}GOOD NEWS!!${NC} Ghost is running and is the latest version."
+  else
+    # Exit script if the Ghost version isn't updated or the status is not running
+    echo "Ghost is either not running or not updated to the latest version. Exiting."
+    exit 1
+  fi
+}
 
-    # Fetch and update access-config
-    read -p "Do you want to re-assign the IP address for: $NEW_VM_NAME? (y/n): " answer
-    if [ "$answer" == "y" ]; then
-      # Fetch the actual access-config names
-      ACTUAL_ACCESS_CONFIG_NAME_OLD=$(gcloud compute instances describe $VM_NAME --zone=$ZONE --format='get(networkInterfaces[0].accessConfigs[0].name)')
-      ACTUAL_ACCESS_CONFIG_NAME_NEW=$(gcloud compute instances describe $NEW_VM_NAME --zone=$ZONE --format='get(networkInterfaces[0].accessConfigs[0].name)')
 
-      # Option to enable stopping the old VM before the IP change to avoid using a premium IP. Unfortunately, you can't assign a standard free IP to a premium instance so if you only have one micro-instance runing that's your free one!
-      gcloud compute instances stop $VM_NAME --zone=$ZONE
+# Function to prompt the user for re-assigning the IP address to the new VM instance
+prompt_update_ip() {
+  # Prompt user for decision on re-assigning IP address
+  read -p "Do you want to re-assign the IP address for: $NEW_VM_NAME? (y/n): " answer
 
-      #Wait for old machine to stop before removing and reassigning the standard IP to the new machine
-      while true; do
+  # Execute if user opts for IP re-assignment
+  if [ "$answer" == "y" ]; then
+    # Fetch the access config names for both old and new VMs
+    ACTUAL_ACCESS_CONFIG_NAME_OLD=$(gcloud compute instances describe $VM_NAME --zone=$ZONE --format='get(networkInterfaces[0].accessConfigs[0].name)')
+    ACTUAL_ACCESS_CONFIG_NAME_NEW=$(gcloud compute instances describe $NEW_VM_NAME --zone=$ZONE --format='get(networkInterfaces[0].accessConfigs[0].name)')
+
+    # Stop the old VM
+    gcloud compute instances stop $VM_NAME --zone=$ZONE
+
+    # Wait for old VM to reach 'TERMINATED' state
+    while true; do
       VM_STATUS=$(gcloud compute instances describe $VM_NAME --zone=$ZONE --format='get(status)')
       if [ "$VM_STATUS" == "TERMINATED" ]; then
            break
       fi
       sleep 5
-      done
+    done
 
-      # Remove old and existing access configs
-      gcloud compute instances delete-access-config $VM_NAME --access-config-name="$ACTUAL_ACCESS_CONFIG_NAME_OLD" --zone=$ZONE
-      gcloud compute instances delete-access-config $NEW_VM_NAME --access-config-name="$ACTUAL_ACCESS_CONFIG_NAME_NEW" --zone=$ZONE
+    # Delete existing access configs for both VMs
+    gcloud compute instances delete-access-config $VM_NAME --access-config-name="$ACTUAL_ACCESS_CONFIG_NAME_OLD" --zone=$ZONE
+    gcloud compute instances delete-access-config $NEW_VM_NAME --access-config-name="$ACTUAL_ACCESS_CONFIG_NAME_NEW" --zone=$ZONE
 
-      # Assign old IP to new VM and set network tier to standard so it can be assigned a standard tier static IP
-	  gcloud compute instances add-access-config $NEW_VM_NAME --access-config-name="$ACTUAL_ACCESS_CONFIG_NAME_NEW" --address=$OLD_IP_ADDRESS --zone=$ZONE --network-tier=STANDARD
+    # Add the old IP address to the new VM
+    gcloud compute instances add-access-config $NEW_VM_NAME --access-config-name="$ACTUAL_ACCESS_CONFIG_NAME_NEW" --address=$OLD_IP_ADDRESS --zone=$ZONE --network-tier=STANDARD || {
+      echo "Failed to add access config. Exiting."
+      exit 1
+    }
 
-    else
-      echo "Not updating the IP."
-    fi
-  else
-    echo "Not updating the IP address because the machine was not updated to the latest version of Ghost and/or isn't running."
+    # Function call to verify IP reassignment
+    verify_ip_assignment
+
+   # Optional: downgrades the VM - this assumes you wanted to update fast by using an upgraded VM
+   # Note: Requires calling uprade_vm too
+    # downgrade_vm
   fi
+}
 
-  echo "Done."
-
+# Verify IP reassignment 
+verify_ip_assignment() {
+  local new_vm_ip=$(gcloud compute instances describe $NEW_VM_NAME --zone=$ZONE --format='get(networkInterfaces[0].accessConfigs[0].natIP)')
+  
+  if [ "$new_vm_ip" == "$OLD_IP_ADDRESS" ]; then
+    echo "$NEW_VM_NAME had its IP successfully re-assigned."
   else
-    echo "Skipping updating Ghost on Google Cloud. Exiting."
+    echo "$NEW_VM_NAME failed to have its IP re-assigned. Exiting."  # Corrected error message
     exit 1
   fi
+}
 
-esac
+# Function to speed up updates by upgrading the VM to a larger machine type
+upgrade_vm() {
+    # Stop the new instance
+    gcloud compute instances stop $NEW_VM_NAME --zone=$ZONE
+    
+    # change the machine type from e2-micro to e2-medium
+    gcloud compute instances set-machine-type $NEW_VM_NAME --zone=$ZONE --machine-type=e2-medium
+
+    # Start the new instance
+    gcloud compute instances start $NEW_VM_NAME --zone=$ZONE
+}
+
+# Function to downgrade the VM to save costs after updates are complete
+downgrade_vm() {
+    # Stop the new VM instance
+    gcloud compute instances stop $NEW_VM_NAME --zone=$ZONE
+
+    # change the machine type from e2-medium to e2-micro
+    gcloud compute instances set-machine-type $NEW_VM_NAME --zone=$ZONE --machine-type=e2-micro
+
+    # Start the new VM instance
+    gcloud compute instances start $NEW_VM_NAME --zone=$ZONE
+
+}
+
+# Function to debug the Ghost version 
+version_string_debugging() {
+  # Debugging: Separate conditions to understand which one is failing
+  if [[ "$GHOST_VM_VERSION" == "${LATEST_VERSION}" ]]; then
+    echo "Version match."
+  else
+    echo "Version mismatch."
+
+   # Additional debugging to show ASCII values
+    echo -n "ASCII for GHOST_VM_VERSION: "
+    echo -n "$GHOST_VM_VERSION" | od -An -tx1
+
+    echo -n "ASCII for LATEST_VERSION: "
+    echo -n "$LATEST_VERSION" | od -An -tx1
+  fi
+
+  if [[ "$GHOST_STATUS" == "running" ]]; then
+    echo "Status match."
+  else
+    echo "Status mismatch."
+  fi
+}
+
+# Function with hardcoded variables in the event one wants to debug the script after Global variables were set
+hardcoded_variables() {
+    VM_NAME=danielraffel-ghost-v5-62-0
+    OLD_IP_ADDRESS=35.212.246.12
+    NEW_VM_NAME=danielraffel-ghost-v5-63-0
+    IP_ADDRESS_NEW_VM=35.212.255.120
+    ZONE=us-west1-b
+}
+
+# Function to aid in debugging a NEW VM that was previously spunup but post update the version checking needs debugging
+debug() {
+    hardcoded_variables
+    fetch_latest_ghost_version
+    check_vm_ghost_version
+    present_vm_ghost_version
+    prompt_update_ip
+}
+
+main() {
+    check_prerequisites
+    prompt_to_update
+    fetch_vm_info
+    fetch_latest_ghost_version
+    create_new_vm
+    check_vm_ready_for_ssh
+    ssh_update_Ghost
+    check_vm_ghost_version
+    present_vm_ghost_version
+    prompt_update_ip
+}
+
+# Function to run the Script. Checks if debug was provided as an argument.
+if [ "$1" == "debug" ]; then
+    # Call the specified function
+    debug
+else
+    # No function name provided, run the default main function
+    main
+fi
