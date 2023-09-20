@@ -241,7 +241,6 @@ ENDSSH1
 ENDSSH2
 }
 
-
 # Function to check the Ghost Blog software version and its running status on the VM
 check_vm_ghost_version() {
   # SSH into the VM and fetch both Ghost version and status in a single SSH session
@@ -270,32 +269,6 @@ check_vm_ghost_version() {
   # Output the fetched Ghost version and status as a comma-separated string
   echo "$version,$status"
 }
-
-# # Function to display the Ghost Blog software version and its running status on the VM
-# present_vm_ghost_version() {
-#   # Define text color variables for terminal output
-#   GREEN='\033[0;32m'
-#   BOLD='\033[1m'
-#   NC='\033[0m'
-
-#   # Fetch Ghost VM version and status from present_vm_ghost_version function
-#   IFS=',' read -ra GHOST_INFO <<< "$(check_vm_ghost_version $IP_ADDRESS_NEW_VM)"
-#   GHOST_VM_VERSION=$(echo "${GHOST_INFO[0]}" | xargs)  # Trim whitespaces
-#   GHOST_STATUS=$(echo "${GHOST_INFO[1]}" | xargs)  # Trim whitespaces
-
-#   # Present what version of Ghost was expected post update vs what version of Ghost was found and if it's running
-#   echo "Expected Ghost Version: '$LATEST_VERSION', Found Version: '$GHOST_VM_VERSION'"
-#   echo "Expected Ghost Status: 'running', Found Status: '$GHOST_STATUS'"
-
-#   # Check if Ghost version matches the latest version and its status is running
-#   if [[ "$GHOST_VM_VERSION" == "${LATEST_VERSION}" && "$GHOST_STATUS" == "running" ]]; then
-#     echo -e "${BOLD}${GREEN}GOOD NEWS!!${NC} Ghost is running and is the latest version."
-#   else
-#     # Exit script if the Ghost version isn't updated or the status is not running
-#     echo "Ghost is either not running or not updated to the latest version. Exiting."
-#     exit 1
-#   fi
-# }
 
 # Function to display the Ghost Blog software version and its running status on the VM
 present_vm_ghost_version() {
@@ -439,7 +412,7 @@ hardcoded_variables() {
     VM_NAME=danielraffel-ghost-v5-62-0
     OLD_IP_ADDRESS=35.212.246.12
     NEW_VM_NAME=danielraffel-ghost-v5-63-0
-    IP_ADDRESS_NEW_VM=35.212.255.120
+    IP_ADDRESS_NEW_VM=
     ZONE=us-west1-b
 }
 
