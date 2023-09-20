@@ -44,7 +44,7 @@ The script does the following:
 
 ## Potential future ideas
 
-* Refactor the code to be modular.
+* <s>Refactor the code to be modular.</s>
 * Make it easy to run only certain commands with parameters (eg backup image, update ghost, reassign IP, etc.)
 * Enable running the script without the few interactive prompts.
 * Cron that can check latest ghost release and offer to auto-update.
