@@ -6,6 +6,12 @@
 
 # Function to check if all required commands and utilities are installed on the system before running script
 check_prerequisites() {
+  # Check if the 'mode' variable is already set to "speedy"
+  if [ "$mode" != "speedy" ]; then
+    # If not, set it to "normal"
+    mode="normal"
+  fi
+
   # Declare required commands and URLs
   commands=("gcloud" "jq" "curl" "expect" "ssh-keygen" "ssh-keyscan")
   urls=("https://cloud.google.com/sdk/docs/install" "https://jqlang.github.io/jq/" "https://curl.se/" "https://www.digitalocean.com/community/tutorials/expect-script-ssh-example-tutorial" "https://docs.github.com/en/authentication/connecting-to-github-with-ssh/generating-a-new-ssh-key-and-adding-it-to-the-ssh-agent" "https://man.openbsd.org/ssh-keyscan.1")
@@ -143,9 +149,10 @@ create_new_vm() {
     --zone=$ZONE \
     --source-machine-image=$IMAGE_NAME
 
-  # Optional: get through updates quicker by using an upgraded VM
-  # Note: Requires calling downgrade_vm too
-  # upgrade_vm
+  # Optional: speed through updates using a beefier E2-medium VM (and changing back to an E2-Micro after) requires using the command line argument "speedy" 
+    if [ "$mode" == "speedy" ]; then
+        upgrade_vm
+    fi
 
   # Wait until the new VM instance reaches the "RUNNING" state
   echo "Waiting for VM to become RUNNING..."
@@ -170,7 +177,7 @@ create_new_vm() {
   gcloud compute disks update $NEW_VM_NAME \
   --project=$PROJECT_ID \
   --zone=$ZONE \
-  --snapshot-schedule=daily-backup-schedule
+  --resource-policies='{"daily-backup-schedule":{"resources":["*"]}}'
 
   # Remove any existing SSH keys associated with the new IP address to prevent conflicts
   echo "Removing any existing keys for the IP: $IP_ADDRESS_NEW_VM"
@@ -183,7 +190,7 @@ check_vm_ready_for_ssh() {
   echo "Checking SSH readiness every 5 seconds..."
 
   # Maximum number of attempts to check for SSH readiness
-  MAX_ATTEMPTS=12
+  MAX_ATTEMPTS=36
   # Initialize a counter to keep track of the number of attempts made
   COUNT=0
 
@@ -216,7 +223,7 @@ check_vm_ready_for_ssh() {
 ssh_update_Ghost() {
   # SSH into the VM to run pre-update commands like stopping Ghost, updating system packages and rebooting VM
   echo "SSHing into the VM to stop Ghost, update system packages and enable Snap package manager..."
-  ssh -t -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -i ~/.ssh/gcp service_account@$IP_ADDRESS_NEW_VM << "ENDSSH1"
+  ssh -t -vvv -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -i ~/.ssh/gcp service_account@$IP_ADDRESS_NEW_VM << "ENDSSH1"
     cd /var/www/ghost
     ghost stop
     sudo snap enable snapd
@@ -227,11 +234,12 @@ ssh_update_Ghost() {
 ENDSSH1
 
   # Call function to check if VM is ready for SSH post-reboot
+  wait 20
   check_vm_ready_for_ssh
 
   # SSH into the VM again to run post-update commands like updating npm and Ghost CLI, and starting Ghost
   echo "SSHing into the updated VM to update Node Package Manager (NPM), Ghost, disable Snap service and start Ghost..."
-  ssh -t -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -i ~/.ssh/gcp service_account@$IP_ADDRESS_NEW_VM << "ENDSSH2"
+  ssh -t -vvv -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -i ~/.ssh/gcp service_account@${IP_ADDRESS_NEW_VM} << "ENDSSH2"
     cd /var/www/ghost
     sudo npm install -g npm@latest
     sudo npm install -g ghost-cli@latest
@@ -341,9 +349,17 @@ prompt_update_ip() {
     # Function call to verify IP reassignment
     verify_ip_assignment
 
-   # Optional: downgrades the VM - this assumes you wanted to update fast by using an upgraded VM
-   # Note: Requires calling uprade_vm too
-    # downgrade_vm
+   # Optional: requires using the command line argument "speedy" which would convert the VM back to E2-micro after the update is complete
+    if [ "$mode" == "speedy" ]; then
+        downgrade_vm
+    fi
+  else
+    if [ "$mode" == "speedy" ]; then
+      echo "You chose not to re-assign the IP address. Downgrading VM..."
+      downgrade_vm
+    else
+      echo "You chose not to re-assign the IP address. Exiting..."
+    fi
   fi
 }
 
@@ -416,32 +432,54 @@ hardcoded_variables() {
     ZONE=us-west1-b
 }
 
-# Function to aid in debugging a NEW VM that was previously spunup but post update the version checking needs debugging
+# Optional: This function is only used by a command-line argument for debugging a NEW VM. It assumes this script was run, a VM was spunup and updated but Ghost version checking needs debugging before switching IPs.
 debug() {
+    # Call function with hardcoded variables in the event one wants to debug the script after Global variables were set 
     hardcoded_variables
+    # Fetches the latest Ghost version available
     fetch_latest_ghost_version
+    # Checks the Ghost version on the VM
     check_vm_ghost_version
+    # Presents the Ghost version installed on the new VM to the user 
     present_vm_ghost_version
+    # Prompts the user to update the IP address from the old VM to the new VM (if desired)
     prompt_update_ip
 }
 
+# Orchestrates the full script by calling the necessary functions in sequence
 main() {
+    # Checks if all prerequisites are met before running the script
     check_prerequisites
+    # Prompts the user to confirm they want to update Ghost
     prompt_to_update
+    # Fetches Virtual Machine information
     fetch_vm_info
+    # Fetches the latest Ghost version available
     fetch_latest_ghost_version
+    # Creates a Machine Image and starts a new VM from that image
     create_new_vm
+    # Checks if the new VM is ready for SSH access
     check_vm_ready_for_ssh
+    # SSH into the new VM and updates Ghost
     ssh_update_Ghost
+    # Checks the Ghost version on the VM
     check_vm_ghost_version
+    # Presents the Ghost version installed on the new VM to the user 
     present_vm_ghost_version
+    # Prompts the user to update the IP address from the old VM to the new VM (if desired)
     prompt_update_ip
 }
 
-# Function to run the Script. Checks if debug was provided as an argument.
+# Checks the first command-line argument and takes action accordingly.
+# - "debug" runs the debug function eg ./update.sh debug
+# - "speedy" changes the mode variable so that the main function passes it to functions which enable upgrade_vm and downgrade_vm (this uses beefier machines just to run the update to make this go faster) eg ./update.sh speedy
+# - No argument defaults to running the main function eg ./update.sh
 if [ "$1" == "debug" ]; then
-    # Call the specified function
+    # Call debug function to run the script in debug mode
     debug
+elif [ "$1" == "speedy" ]; then
+    mode="speedy"
+    main
 else
     # No function name provided, run the default main function
     main
