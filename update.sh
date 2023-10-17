@@ -243,6 +243,7 @@ ENDSSH1
     cd /var/www/ghost
     sudo npm install -g npm@latest
     sudo npm install -g ghost-cli@latest
+    sudo find ./ ! -path "./versions/*" -type f -exec chmod 664 {} \;
     ghost update
     sudo snap disable snapd
     ghost start
