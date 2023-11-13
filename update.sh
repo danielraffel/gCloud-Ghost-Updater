@@ -189,6 +189,9 @@ check_vm_ready_for_ssh() {
   # Notify the user that SSH readiness is being checked
   echo "Checking SSH readiness every 5 seconds..."
 
+  # Once again, remove any existing SSH keys associated with the new IP address to prevent conflicts
+  ssh-keygen -R $IP_ADDRESS_NEW_VM 2>/dev/null
+
   # Maximum number of attempts to check for SSH readiness
   MAX_ATTEMPTS=36
   # Initialize a counter to keep track of the number of attempts made
@@ -244,6 +247,7 @@ ENDSSH1
     sudo npm install -g npm@latest
     sudo npm install -g ghost-cli@latest
     sudo find ./ ! -path "./versions/*" -type f -exec chmod 664 {} \;
+    sudo chown -R ghost:ghost ./content
     ghost update
     sudo snap disable snapd
     ghost start
