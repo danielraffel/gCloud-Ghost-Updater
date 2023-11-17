@@ -237,7 +237,7 @@ ssh_update_Ghost() {
 ENDSSH1
 
   # Call function to check if VM is ready for SSH post-reboot
-  wait 20
+  sleep 30
   check_vm_ready_for_ssh
 
   # SSH into the VM again to run post-update commands like updating npm and Ghost CLI, and starting Ghost
