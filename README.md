@@ -30,6 +30,9 @@ Although not required, this script is compatible with [httpPing](https://github.
 6. Updates Ghost and restarts it
 7. Offers to reassign your static IP to the new VM
 8. Provides notifications throughout the process
+<img width="410" alt="Want to reassign IPs? notification" src="https://github.com/user-attachments/assets/87ad05b7-2064-4df4-ba6d-27eec11dcdf1" />
+<img width="758" alt="Update complete! notification" src="https://github.com/user-attachments/assets/1db778bc-3bbe-4a89-b8d6-eac9b04088d7" />
+
 
 ## Usage Modes
 
