@@ -4,6 +4,18 @@
 # It creates a new VM with the latest Ghost version, ensures Ghost is updated and running
 # Offers to transfer the IP address from the OLD VM to the NEW VM if desired by the user
 
+# Standard update
+# ./update.sh
+
+# Fast update with temporary VM upgrade
+# ./update.sh speedy
+
+# Test notifications
+# ./update.sh test-notification
+
+# Debug mode
+# ./update.sh debug
+
 # Function to check if all required commands and utilities are installed on the system before running script
 check_prerequisites() {
   # Check if the 'mode' variable is already set to "speedy"
@@ -317,55 +329,93 @@ present_vm_ghost_version() {
   fi
 }
 
+# Function to send macOS notification
+send_notification() {
+    local title="$1"
+    local message="$2"
+    local response_file="/tmp/ghost_notification_response"
+    
+    if [ "$3" = "interactive" ]; then
+        # Send interactive notification with Yes/No buttons
+        osascript -e "tell app \"System Events\" to display dialog \"$message\" buttons {\"Yes\", \"No\"} with title \"$title\"" > "$response_file" 2>&1
+        if [ $? -eq 0 ]; then
+            echo "y"
+        else
+            echo "n"
+        fi
+    else
+        # Send informational notification
+        osascript -e "display notification \"$message\" with title \"$title\""
+    fi
+}
+
+# Function to test notification system
+test_notifications() {
+    echo "Testing notification system..."
+    send_notification "Ghost Updater Test" "This is a test notification" "info"
+    sleep 2
+    
+    echo "Testing interactive notification..."
+    local response=$(send_notification "Ghost Updater Test" "This is a test interactive notification. Click Yes or No." "interactive")
+    echo "Response received: $response"
+    
+    if [ "$response" = "y" ] || [ "$response" = "n" ]; then
+        send_notification "Ghost Updater Test" "Test completed successfully!" "info"
+        echo "Notification test completed successfully."
+    else
+        echo "Notification test failed."
+        exit 1
+    fi
+}
 
 # Function to prompt the user for re-assigning the IP address to the new VM instance
 prompt_update_ip() {
-  # Prompt user for decision on re-assigning IP address
-  read -p "Do you want to re-assign the IP address for: $NEW_VM_NAME? (y/n): " answer
+    local notification_message="GOOD NEWS!! Ghost is running and is the latest version ${LATEST_VERSION}. Do you want to re-assign the IP address for: $NEW_VM_NAME?"
+    local response=$(send_notification "Ghost Updater" "$notification_message" "interactive")
 
-  # Execute if user opts for IP re-assignment
-  if [ "$answer" == "y" ]; then
-    # Fetch the access config names for both old and new VMs
-    ACTUAL_ACCESS_CONFIG_NAME_OLD=$(gcloud compute instances describe $VM_NAME --zone=$ZONE --format='get(networkInterfaces[0].accessConfigs[0].name)')
-    ACTUAL_ACCESS_CONFIG_NAME_NEW=$(gcloud compute instances describe $NEW_VM_NAME --zone=$ZONE --format='get(networkInterfaces[0].accessConfigs[0].name)')
+    # Execute if user opts for IP re-assignment
+    if [ "$response" = "y" ]; then
+        # Fetch the access config names for both old and new VMs
+        ACTUAL_ACCESS_CONFIG_NAME_OLD=$(gcloud compute instances describe $VM_NAME --zone=$ZONE --format='get(networkInterfaces[0].accessConfigs[0].name)')
+        ACTUAL_ACCESS_CONFIG_NAME_NEW=$(gcloud compute instances describe $NEW_VM_NAME --zone=$ZONE --format='get(networkInterfaces[0].accessConfigs[0].name)')
 
-    # Stop the old VM
-    gcloud compute instances stop $VM_NAME --zone=$ZONE
+        # Stop the old VM
+        gcloud compute instances stop $VM_NAME --zone=$ZONE
 
-    # Wait for old VM to reach 'TERMINATED' state
-    while true; do
-      VM_STATUS=$(gcloud compute instances describe $VM_NAME --zone=$ZONE --format='get(status)')
-      if [ "$VM_STATUS" == "TERMINATED" ]; then
-           break
-      fi
-      sleep 5
-    done
+        # Wait for old VM to reach 'TERMINATED' state
+        while true; do
+          VM_STATUS=$(gcloud compute instances describe $VM_NAME --zone=$ZONE --format='get(status)')
+          if [ "$VM_STATUS" == "TERMINATED" ]; then
+               break
+          fi
+          sleep 5
+        done
 
-    # Delete existing access configs for both VMs
-    gcloud compute instances delete-access-config $VM_NAME --access-config-name="$ACTUAL_ACCESS_CONFIG_NAME_OLD" --zone=$ZONE
-    gcloud compute instances delete-access-config $NEW_VM_NAME --access-config-name="$ACTUAL_ACCESS_CONFIG_NAME_NEW" --zone=$ZONE
+        # Delete existing access configs for both VMs
+        gcloud compute instances delete-access-config $VM_NAME --access-config-name="$ACTUAL_ACCESS_CONFIG_NAME_OLD" --zone=$ZONE
+        gcloud compute instances delete-access-config $NEW_VM_NAME --access-config-name="$ACTUAL_ACCESS_CONFIG_NAME_NEW" --zone=$ZONE
 
-    # Add the old IP address to the new VM
-    gcloud compute instances add-access-config $NEW_VM_NAME --access-config-name="$ACTUAL_ACCESS_CONFIG_NAME_NEW" --address=$OLD_IP_ADDRESS --zone=$ZONE --network-tier=STANDARD || {
-      echo "Failed to add access config. Exiting."
-      exit 1
-    }
+        # Add the old IP address to the new VM
+        gcloud compute instances add-access-config $NEW_VM_NAME --access-config-name="$ACTUAL_ACCESS_CONFIG_NAME_NEW" --address=$OLD_IP_ADDRESS --zone=$ZONE --network-tier=STANDARD || {
+          echo "Failed to add access config. Exiting."
+          exit 1
+        }
 
-    # Function call to verify IP reassignment
-    verify_ip_assignment
+        # Function call to verify IP reassignment
+        verify_ip_assignment
 
-   # Optional: requires using the command line argument "speedy" which would convert the VM back to E2-micro after the update is complete
-    if [ "$mode" == "speedy" ]; then
-        downgrade_vm
-    fi
-  else
-    if [ "$mode" == "speedy" ]; then
-      echo "You chose not to re-assign the IP address. Downgrading VM..."
-      downgrade_vm
+       # Optional: requires using the command line argument "speedy" which would convert the VM back to E2-micro after the update is complete
+        if [ "$mode" == "speedy" ]; then
+            downgrade_vm
+        fi
     else
-      echo "You chose not to re-assign the IP address. Exiting..."
+        if [ "$mode" == "speedy" ]; then
+            send_notification "Ghost Updater" "Downgrading VM..." "info"
+            downgrade_vm
+        else
+            send_notification "Ghost Updater" "IP address not reassigned. Exiting..." "info"
+        fi
     fi
-  fi
 }
 
 # Verify IP reassignment 
@@ -453,38 +503,61 @@ debug() {
 
 # Orchestrates the full script by calling the necessary functions in sequence
 main() {
-    # Checks if all prerequisites are met before running the script
-    check_prerequisites
-    # Prompts the user to confirm they want to update Ghost
+    send_notification "Ghost Updater" "Starting Ghost update process..." "info"
+    
+    check_prerequisites || {
+        send_notification "Ghost Updater Error" "Prerequisites check failed" "info"
+        exit 1
+    }
     prompt_to_update
-    # Fetches Virtual Machine information
-    fetch_vm_info
-    # Fetches the latest Ghost version available
-    fetch_latest_ghost_version
-    # Creates a Machine Image and starts a new VM from that image
-    create_new_vm
-    # Checks if the new VM is ready for SSH access
-    check_vm_ready_for_ssh
-    # SSH into the new VM and updates Ghost
-    ssh_update_Ghost
-    # Checks the Ghost version on the VM
-    check_vm_ghost_version
-    # Presents the Ghost version installed on the new VM to the user 
-    present_vm_ghost_version
-    # Prompts the user to update the IP address from the old VM to the new VM (if desired)
+    fetch_vm_info || {
+        send_notification "Ghost Updater Error" "Failed to fetch VM info" "info"
+        exit 1
+    }
+    fetch_latest_ghost_version || {
+        send_notification "Ghost Updater Error" "Failed to fetch latest Ghost version" "info"
+        exit 1
+    }
+    create_new_vm || {
+        send_notification "Ghost Updater Error" "Failed to create new VM" "info"
+        exit 1
+    }
+    check_vm_ready_for_ssh || {
+        send_notification "Ghost Updater Error" "VM not ready for SSH" "info"
+        exit 1
+    }
+    ssh_update_Ghost || {
+        send_notification "Ghost Updater Error" "Ghost update failed" "info"
+        exit 1
+    }
+    check_vm_ghost_version || {
+        send_notification "Ghost Updater Error" "Failed to check Ghost version" "info"
+        exit 1
+    }
+    present_vm_ghost_version || {
+        send_notification "Ghost Updater Error" "Version verification failed" "info"
+        exit 1
+    }
     prompt_update_ip
+    
+    # Send completion notification
+    local internal_ip=$(gcloud compute instances describe $NEW_VM_NAME --zone=$ZONE --format='get(networkInterfaces[0].internalIp)')
+    local external_ip=$(gcloud compute instances describe $NEW_VM_NAME --zone=$ZONE --format='get(networkInterfaces[0].accessConfigs[0].natIP)')
+    send_notification "Ghost Updater Complete" "Instance external IP: ${external_ip}" "info"
 }
 
 # Checks the first command-line argument and takes action accordingly.
 # - "debug" runs the debug function eg ./update.sh debug
 # - "speedy" changes the mode variable so that the main function passes it to functions which enable upgrade_vm and downgrade_vm (this uses beefier machines just to run the update to make this go faster) eg ./update.sh speedy
+# - "test-notification" runs the test_notifications function
 # - No argument defaults to running the main function eg ./update.sh
-if [ "$1" == "debug" ]; then
-    # Call debug function to run the script in debug mode
-    debug
+if [ "$1" == "test-notification" ]; then
+    test_notifications
 elif [ "$1" == "speedy" ]; then
     mode="speedy"
     main
+elif [ "$1" == "debug" ]; then
+    debug
 else
     # No function name provided, run the default main function
     main
