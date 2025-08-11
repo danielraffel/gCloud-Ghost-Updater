@@ -1,8 +1,12 @@
 # gCloud Ghost Updater
 
+[Blog post](https://danielraffel.me/2025/08/11/ghost-gcp-updater-script-now-supports-migration-from-v5-to-v6/)
+
+---
+
 This bash script helps automate the update process for Ghost running on a VM in Google Cloud. It was inspired by [Amazon rolling deployment](https://docs.aws.amazon.com/whitepapers/latest/overview-deployment-options/rolling-deployments.html) and designed because the author is running a micro instance which is very resource limited. It creates a machine image backup, starts a new VM, updates Ghost to the latest version, and offers to reassign your external IP. The script includes native macOS notifications to keep you informed of progress and important decisions so you can run in the background without forgetting about it.
 
-**This release is built for Ghost v6 and supports updating from a v5 installation previously set up with an earlier version of this script.** _If you’re still using Ghost v5 and prefer not to upgrade v6, [use the v5-compatible version instead](https://github.com/danielraffel/gCloud-Ghost-Updater/releases/tag/0.1).
+**This release is built for Ghost v6 and supports updating from a v5 installation previously set up with an earlier version of this script.** _If you’re still using Ghost v5 and prefer not to upgrade v6, [use the v5-compatible version instead](https://github.com/danielraffel/gCloud-Ghost-Updater/releases/tag/0.1)._
 
 Although not required, this script is compatible with [httpPing](https://github.com/danielraffel/httpPing) and [RestartVMService](https://github.com/danielraffel/RestartVMService) to facilitate restarting your VM if the URL it's hosting appears to be offline.
 
