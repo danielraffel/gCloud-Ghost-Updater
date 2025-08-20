@@ -2,6 +2,14 @@
 
 set -e
 
+# Prevent accidental double-runs
+LOCK_DIR="/tmp/gcloud-ghost-updater.lock"
+if ! mkdir "$LOCK_DIR" 2>/dev/null; then
+  echo "Another updater instance appears to be running. Exiting."
+  exit 1
+fi
+trap 'rm -rf "$LOCK_DIR"' EXIT
+
 # Load environment overrides if present (can be disabled with IGNORE_DOTENV=true)
 if [ -f ".env" ] && [ "${IGNORE_DOTENV}" != "true" ]; then
   set -a
@@ -12,17 +20,18 @@ fi
 
 # SSH configuration (overridable via .env)
 SSH_USER="${SSH_USER:-service_account}"
-SSH_KEY_PATH="${SSH_KEY_PATH:-$HOME/.ssh/gcloud}"
+SSH_KEY_PATH="${SSH_KEY_PATH:-$HOME/.ssh/gcp}"
 
 # Build SSH identity options: if key file exists, force its use; otherwise, fall back to agent/default identities
-SSH_IDENTITY_OPTS=""
+SSH_ARGS=()
 if [ -n "$SSH_KEY_PATH" ] && [ -f "$SSH_KEY_PATH" ]; then
-  SSH_IDENTITY_OPTS="-o IdentitiesOnly=yes -i $SSH_KEY_PATH"
+  SSH_ARGS=(-o IdentitiesOnly=yes -i "$SSH_KEY_PATH")
 fi
 
 # Script directory and overridable paths/configs
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LOCAL_NODE_VERSION_SCRIPT="${LOCAL_NODE_VERSION_SCRIPT:-"$SCRIPT_DIR/get_latest_node_version.js"}"
+DEFAULT_NODE_VERSION_SCRIPT="$SCRIPT_DIR/get_latest_node_version.js"
 RESOURCE_POLICY_NAME="${RESOURCE_POLICY_NAME:-daily-backup-schedule}"
 SPEEDY_MACHINE_TYPE="${SPEEDY_MACHINE_TYPE:-e2-medium}"
 NORMAL_MACHINE_TYPE="${NORMAL_MACHINE_TYPE:-e2-micro}"
@@ -30,6 +39,24 @@ SSH_CONNECT_TIMEOUT="${SSH_CONNECT_TIMEOUT:-10}"
 SSH_MAX_ATTEMPTS="${SSH_MAX_ATTEMPTS:-36}"
 SSH_RETRY_SLEEP="${SSH_RETRY_SLEEP:-5}"
 AUTO_PRECHECK="${AUTO_PRECHECK:-true}"
+DEBUG="${DEBUG:-false}"
+
+# If someone set LOCAL_NODE_VERSION_SCRIPT to a bare number (e.g., "22"),
+# treat it as a misconfiguration and fall back to the bundled script path.
+if [[ "$LOCAL_NODE_VERSION_SCRIPT" =~ ^[0-9]+$ ]]; then
+  if [ "$DEBUG" = "true" ]; then
+    echo "Using default Node version helper (LOCAL_NODE_VERSION_SCRIPT='${LOCAL_NODE_VERSION_SCRIPT}')."
+  fi
+  LOCAL_NODE_VERSION_SCRIPT="$DEFAULT_NODE_VERSION_SCRIPT"
+fi
+
+# If the specified path does not exist, but the bundled script does, use it.
+if [ ! -f "$LOCAL_NODE_VERSION_SCRIPT" ] && [ -f "$DEFAULT_NODE_VERSION_SCRIPT" ]; then
+  if [ "$DEBUG" = "true" ]; then
+    echo "Using default Node version helper (missing: '$LOCAL_NODE_VERSION_SCRIPT')."
+  fi
+  LOCAL_NODE_VERSION_SCRIPT="$DEFAULT_NODE_VERSION_SCRIPT"
+fi
 
 # This script automates the process of updating a Google Cloud VM running Ghost Blog
 # It creates a new VM with the latest Ghost version, ensures Ghost is updated and running
@@ -55,6 +82,11 @@ AUTO_PRECHECK="${AUTO_PRECHECK:-true}"
 
 # Force update (bypass precheck) really only useful if you know you need to update
 # ./update.sh force
+
+# Fast smoke test to validate the SSH parsing of Ghost version without running the full flow: runs the same ghost version && ghost status via the SSH arg handling
+# ./update.sh quick-test
+# # or
+# ./update.sh smoke
 
 # Function to check if all required commands and utilities are installed on the system before running script
 check_prerequisites() {
@@ -84,6 +116,24 @@ check_prerequisites() {
     echo "Exiting updater."
     exit 1
   fi
+}
+
+# Quick connectivity and parsing test (no VM creation)
+quick_test() {
+  check_prerequisites || exit 2
+  fetch_vm_info || exit 2
+  fetch_latest_ghost_version || exit 2
+  IP_ADDRESS_NEW_VM="$OLD_IP_ADDRESS"
+  echo "Running quick test on ${VM_NAME} (${IP_ADDRESS_NEW_VM})..."
+  local result
+  result=$(check_vm_ghost_version) || exit 2
+  IFS=',' read -ra info <<< "$result"
+  local found_version found_status latest_clean
+  found_version=$(echo "${info[0]}" | sed 's/\x1b\[[0-9;]*m//g' | awk -F'[[:space:]]+' '{print $NF}' | sed 's/^v//')
+  found_status=$(echo "${info[1]}" | xargs)
+  latest_clean=$(echo "$LATEST_VERSION" | sed 's/^v//')
+  echo "Expected Ghost Version: '${latest_clean}', Found Version: '${found_version}'"
+  echo "Expected Ghost Status: 'running', Found Status: '${found_status}'"
 }
 
 # Function to check if user wants to update Ghost using this installer
@@ -185,7 +235,7 @@ precheck_versions() {
   echo "Running precheck on current VM ($VM_NAME @ $OLD_IP_ADDRESS)..."
   local output
   # Do NOT allocate a TTY here to avoid colored output; keep it clean for parsing
-  if ! output=$(ssh -q -o BatchMode=yes -o StrictHostKeyChecking=no $SSH_IDENTITY_OPTS ${SSH_USER}@$OLD_IP_ADDRESS "cd /var/www/ghost && ghost version" 2>/dev/null); then
+  if ! output=$(ssh -q -o BatchMode=yes -o StrictHostKeyChecking=no "${SSH_ARGS[@]}" ${SSH_USER}@$OLD_IP_ADDRESS "cd /var/www/ghost && ghost version" 2>/dev/null); then
     echo "Precheck SSH failed; skipping precheck."
     return 2
   fi
@@ -286,7 +336,7 @@ check_vm_ready_for_ssh() {
 
   # Loop to keep trying SSH connection until it's ready or the maximum attempts are reached
   while true; do
-    ssh -q -o BatchMode=yes -o ConnectTimeout=${SSH_CONNECT_TIMEOUT} -o StrictHostKeyChecking=no $SSH_IDENTITY_OPTS ${SSH_USER}@${IP_ADDRESS_NEW_VM} exit
+    ssh -q -o BatchMode=yes -o ConnectTimeout=${SSH_CONNECT_TIMEOUT} -o StrictHostKeyChecking=no "${SSH_ARGS[@]}" ${SSH_USER}@${IP_ADDRESS_NEW_VM} exit
     RESULT=$?
     # If SSH connection is successful, break the loop
     if [ $RESULT -eq 0 ]; then
@@ -317,11 +367,11 @@ ssh_update_Ghost() {
     echo "Local Node version script not found: $LOCAL_NODE_VERSION_SCRIPT" >&2
     exit 1
   fi
-  scp -o StrictHostKeyChecking=no $SSH_IDENTITY_OPTS "$LOCAL_NODE_VERSION_SCRIPT" "${SSH_USER}@$IP_ADDRESS_NEW_VM:~/get_latest_node_version.js"
+  scp -o StrictHostKeyChecking=no "${SSH_ARGS[@]}" "$LOCAL_NODE_VERSION_SCRIPT" "${SSH_USER}@$IP_ADDRESS_NEW_VM:~/get_latest_node_version.js"
 
   # SSH into the VM to run pre-update commands like stopping Ghost, updating system packages and enable Snap package manager...
   echo "SSHing into the VM to stop Ghost, update system packages and enable Snap package manager..."
-  ssh -t -vvv -o StrictHostKeyChecking=no $SSH_IDENTITY_OPTS ${SSH_USER}@$IP_ADDRESS_NEW_VM << "ENDSSH1"
+  ssh -t -vvv -o StrictHostKeyChecking=no "${SSH_ARGS[@]}" ${SSH_USER}@$IP_ADDRESS_NEW_VM << "ENDSSH1"
     sudo mv ~/get_latest_node_version.js /usr/local/bin/
     cd /var/www/ghost
     ghost stop
@@ -340,7 +390,7 @@ ENDSSH1
 
   # SSH into the VM again to run post-update commands like updating npm and Ghost CLI, and starting Ghost
   echo "SSHing into the updated VM to update Node Package Manager (NPM), Ghost, disable Snap service and start Ghost..."
-  ssh -t -vvv -o StrictHostKeyChecking=no $SSH_IDENTITY_OPTS ${SSH_USER}@${IP_ADDRESS_NEW_VM} << "ENDSSH2"
+  ssh -t -vvv -o StrictHostKeyChecking=no "${SSH_ARGS[@]}" ${SSH_USER}@${IP_ADDRESS_NEW_VM} << "ENDSSH2"
     set -e
     cd /var/www/ghost
     
@@ -356,19 +406,31 @@ ENDSSH1
     if [ -z "$ENGINE_RANGE" ] && [ -f current/package.json ]; then
       ENGINE_RANGE=$(grep -E '"node"' current/package.json | head -n1 | sed -E 's/.*"node"\s*:\s*"([^"]+)".*/\1/' || true)
     fi
-    ENGINE_MAJOR=""
+    # Parse engines range to find the allowed majors (e.g., ^18 || ^20 || ^22)
+    ENGINE_MIN_MAJOR=""
+    ENGINE_MAX_MAJOR=""
     if [ -n "$ENGINE_RANGE" ]; then
-      ENGINE_MAJOR=$(echo "$ENGINE_RANGE" | sed -E 's/[^0-9]*([0-9]{1,2}).*/\1/' | head -n1)
+      ENGINE_MIN_MAJOR=$(echo "$ENGINE_RANGE" | grep -oE '[0-9]{1,2}' | sort -n | head -n1 || true)
+      ENGINE_MAX_MAJOR=$(echo "$ENGINE_RANGE" | grep -oE '[0-9]{1,2}' | sort -n | tail -n1 || true)
     fi
-    echo "Detected current Ghost engines.node: '${ENGINE_RANGE}' (major: '${ENGINE_MAJOR}')"
+    echo "Detected current Ghost engines.node: '${ENGINE_RANGE}' (min: '${ENGINE_MIN_MAJOR}', max: '${ENGINE_MAX_MAJOR}')"
 
-    # Choose a Node major to use next
-    # - If we can read engines.node major, prefer that for same-major updates (>= v6)
-    # - Otherwise fall back to the latest supported major from the Ghost release metadata
+    # Determine current installed Node major
+    CURRENT_NODE_MAJOR=$(node -v 2>/dev/null | sed 's/^v//' | cut -d. -f1)
+    echo "Current Node major detected: ${CURRENT_NODE_MAJOR}"
+
+    # Choose a Node major to use next:
+    # - Prefer not to downgrade if current satisfies engines range
+    # - Otherwise, pick the highest allowed by engines but not higher than Ghost's latest supported major
     TARGET_NODE_MAJOR="$LATEST_SUPPORTED_VERSION"
-    if [ -n "$ENGINE_MAJOR" ]; then
-      TARGET_NODE_MAJOR="$ENGINE_MAJOR"
+    if [ -n "$ENGINE_MAX_MAJOR" ]; then
+      if [ "$ENGINE_MAX_MAJOR" -lt "$LATEST_SUPPORTED_VERSION" ]; then
+        TARGET_NODE_MAJOR="$ENGINE_MAX_MAJOR"
+      else
+        TARGET_NODE_MAJOR="$LATEST_SUPPORTED_VERSION"
+      fi
     fi
+    echo "Candidate Node major target: ${TARGET_NODE_MAJOR} (Ghost latest-supported: ${LATEST_SUPPORTED_VERSION})"
 
     sudo npm install -g n
     sudo npm install -g npm@latest
@@ -394,8 +456,29 @@ ENDSSH1
       sudo n ${TARGET_NODE_FOR_V6}
       sudo npm install -g ghost-cli@latest
     else
-      echo "Ensuring Node v${TARGET_NODE_MAJOR} for current Ghost major..."
-      sudo n ${TARGET_NODE_MAJOR}
+      # For Ghost v6+ respect engines range and avoid unnecessary downgrades
+      if [ -n "$ENGINE_MIN_MAJOR" ] && [ -n "$ENGINE_MAX_MAJOR" ] && [ -n "$CURRENT_NODE_MAJOR" ]; then
+        if [ "$CURRENT_NODE_MAJOR" -ge "$ENGINE_MIN_MAJOR" ] && [ "$CURRENT_NODE_MAJOR" -le "$ENGINE_MAX_MAJOR" ]; then
+          # Already satisfies engines range; upgrade only if below target
+          if [ "$CURRENT_NODE_MAJOR" -lt "$TARGET_NODE_MAJOR" ]; then
+            echo "Upgrading Node from v${CURRENT_NODE_MAJOR} to v${TARGET_NODE_MAJOR} to match allowed/highest target..."
+            sudo n ${TARGET_NODE_MAJOR}
+          else
+            echo "Current Node v${CURRENT_NODE_MAJOR} satisfies engines; not downgrading."
+          fi
+        else
+          echo "Current Node v${CURRENT_NODE_MAJOR} is outside engines range [${ENGINE_MIN_MAJOR}-${ENGINE_MAX_MAJOR}]; switching to v${TARGET_NODE_MAJOR}..."
+          sudo n ${TARGET_NODE_MAJOR}
+        fi
+      else
+        # No reliable engines info; ensure at least Ghost's latest-supported major
+        if [ -n "$CURRENT_NODE_MAJOR" ] && [ "$CURRENT_NODE_MAJOR" -lt "$LATEST_SUPPORTED_VERSION" ]; then
+          echo "No engines info; upgrading Node from v${CURRENT_NODE_MAJOR} to v${LATEST_SUPPORTED_VERSION}..."
+          sudo n ${LATEST_SUPPORTED_VERSION}
+        else
+          echo "No engines info; keeping current Node or already at/above latest supported."
+        fi
+      fi
       sudo npm install -g ghost-cli@latest
     fi
     
@@ -409,7 +492,7 @@ ENDSSH2
 check_vm_ghost_version() {
   # SSH into the VM and fetch both Ghost version and status in a single SSH session
   local output
-  output=$(ssh -t -o StrictHostKeyChecking=no $SSH_IDENTITY_OPTS ${SSH_USER}@$IP_ADDRESS_NEW_VM "cd /var/www/ghost && ghost version && ghost status") || {
+  output=$(ssh -q -o BatchMode=yes -o StrictHostKeyChecking=no "${SSH_ARGS[@]}" ${SSH_USER}@$IP_ADDRESS_NEW_VM "cd /var/www/ghost && ghost version && ghost status" 2>/dev/null) || {
     echo "SSH command failed. Exiting."
     exit 1
   }
@@ -758,6 +841,10 @@ case "$1" in
   backup|image-backup)
     # Only create a machine image of the current VM, then exit
     backup_only
+    ;;
+  quick-test|smoke)
+    quick_test
+    exit 0
     ;;
   *)
     main
