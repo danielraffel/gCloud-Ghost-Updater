@@ -221,9 +221,16 @@ fetch_vm_info() {
 fetch_latest_ghost_version() {
   # Fetch the latest version of Ghost Blog from GitHub releases
   echo "Fetching latest Ghost Blog version..."
-  LATEST_VERSION=$(curl --silent "https://api.github.com/repos/TryGhost/Ghost/releases/latest" | jq -r .tag_name)
-  # This will remove the "v" prefix
-#   LATEST_VERSION=${LATEST_VERSION:1}
+
+  # Get all releases and find the latest stable version (not prerelease)
+  LATEST_VERSION=$(curl --silent "https://api.github.com/repos/TryGhost/Ghost/releases" | \
+    jq -r '.[] | select(.prerelease == false) | .tag_name' | \
+    sort -V | tail -n1)
+
+  # Fallback to /releases/latest if the above fails
+  if [ -z "$LATEST_VERSION" ] || [ "$LATEST_VERSION" = "null" ]; then
+    LATEST_VERSION=$(curl --silent "https://api.github.com/repos/TryGhost/Ghost/releases/latest" | jq -r .tag_name)
+  fi
 
   # Format the version string for usage in the new VM name
   LATEST_VERSION_FORMATTED="${LATEST_VERSION//./-}"
